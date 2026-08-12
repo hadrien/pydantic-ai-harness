@@ -317,7 +317,7 @@ class SubAgentToolset(FunctionToolset[AgentDepsT]):
         else:
             own_budget = False
             usage = ctx.usage if self._forward_usage else None
-            usage_limits = None
+            usage_limits = ctx.usage_limits if self._forward_usage else None
 
         # A selected menu option decides the model and how it runs. Without one, a
         # sub-agent with no model of its own (e.g. one loaded from disk) inherits the

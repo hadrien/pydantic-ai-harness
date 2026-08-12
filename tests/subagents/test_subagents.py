@@ -23,7 +23,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import AgentDepsT, RunContext
-from pydantic_ai.usage import UsageLimits
+from pydantic_ai.usage import RunUsage, UsageLimits
 
 from pydantic_ai_harness.subagents import SubAgent, SubAgents, SubAgentToolset
 
@@ -545,6 +545,31 @@ class TestRunControls:
         )
         with pytest.raises(UsageLimitExceeded):
             await parent.run('go', usage_limits=UsageLimits(request_limit=1))
+
+    async def test_shared_usage_honors_parent_request_limit(self) -> None:
+        model = TestModel(custom_output_text='W')
+        worker = Agent(model, name='worker')
+        toolset: SubAgentToolset[object] = SubAgentToolset(
+            agents={'worker': SubAgent(worker)},
+            forward_usage=True,
+            inherit_tools=False,
+            shared_capabilities=[],
+            event_stream_handler=None,
+            tool_name='delegate_task',
+            tool_retries=1,
+            contain_errors=False,
+            call_counts={},
+        )
+        usage = RunUsage(requests=50)
+        ctx: RunContext[object] = RunContext(
+            deps=None,
+            model=model,
+            usage=usage,
+            usage_limits=UsageLimits(request_limit=100),
+        )
+
+        assert await toolset.delegate_task(ctx, 'worker', 'do it') == 'W'
+        assert usage.requests == 51
 
     async def test_timeout_returns_soft_message(self) -> None:
         async def slow_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
