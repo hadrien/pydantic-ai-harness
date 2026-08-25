@@ -55,6 +55,20 @@ _ALWAYS_PROPAGATE: tuple[type[Exception], ...] = (
 )
 
 
+def _forwarded_limits(limits: UsageLimits | None) -> UsageLimits | None:
+    """The parent's `UsageLimits` as a sub-agent run should inherit them.
+
+    Every ceiling carries over, which is what makes the budget tree-wide.
+    `count_tokens_before_request` does not: it selects a request pipeline rather than setting a
+    budget, and `Model.count_tokens` raises `NotImplementedError` on the models that do not
+    implement it. A delegation can route the child to a different model (see the `models` menu),
+    so inheriting the flag would abort delegations whose parent-side token counting works fine.
+    """
+    if limits is None or not limits.count_tokens_before_request:
+        return limits
+    return replace(limits, count_tokens_before_request=False)
+
+
 @dataclass(frozen=True)
 class SubAgent(Generic[AgentDepsT]):
     """One delegate: a child agent plus its per-delegate run controls.
@@ -317,7 +331,12 @@ class SubAgentToolset(FunctionToolset[AgentDepsT]):
         else:
             own_budget = False
             usage = ctx.usage if self._forward_usage else None
-            usage_limits = ctx.usage_limits if self._forward_usage else None
+            # The parent's ceilings ride along with its usage, so the budget is tree-wide.
+            # No request is held back the way `reserved_usage_limits` holds one for the nested
+            # runs capabilities start from a hook: a delegation runs in the tool-execution
+            # phase, after the parent's request was made and counted, so there is no approved
+            # request left for the child to spend.
+            usage_limits = _forwarded_limits(ctx.usage_limits) if self._forward_usage else None
 
         # A selected menu option decides the model and how it runs. Without one, a
         # sub-agent with no model of its own (e.g. one loaded from disk) inherits the
