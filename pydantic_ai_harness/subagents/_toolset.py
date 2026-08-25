@@ -58,15 +58,25 @@ _ALWAYS_PROPAGATE: tuple[type[Exception], ...] = (
 def _forwarded_limits(limits: UsageLimits | None) -> UsageLimits | None:
     """The parent's `UsageLimits` as a sub-agent run should inherit them.
 
-    Every ceiling carries over, which is what makes the budget tree-wide.
-    `count_tokens_before_request` does not: it selects a request pipeline rather than setting a
+    Every ceiling carries over, which is what makes the budget tree-wide, with two adjustments.
+
+    `count_tokens_before_request` is dropped: it selects a request pipeline rather than setting a
     budget, and `Model.count_tokens` raises `NotImplementedError` on the models that do not
     implement it. A delegation can route the child to a different model (see the `models` menu),
     so inheriting the flag would abort delegations whose parent-side token counting works fine.
+
+    A finite `tool_calls_limit` reserves one call for the delegation in flight. The parent's
+    `delegate_task` call is counted once it returns, not when it starts, so a child checking the
+    raw limit spends a budget that does not yet include the delegation wrapping it and the tree
+    lands one call over. `request_limit` needs no such reservation: a delegation runs in the
+    tool-execution phase, after the parent's request was made and counted.
     """
-    if limits is None or not limits.count_tokens_before_request:
+    if limits is None:
+        return None
+    if limits.tool_calls_limit is None and not limits.count_tokens_before_request:
         return limits
-    return replace(limits, count_tokens_before_request=False)
+    reserved = None if limits.tool_calls_limit is None else max(0, limits.tool_calls_limit - 1)
+    return replace(limits, tool_calls_limit=reserved, count_tokens_before_request=False)
 
 
 @dataclass(frozen=True)
@@ -332,10 +342,7 @@ class SubAgentToolset(FunctionToolset[AgentDepsT]):
             own_budget = False
             usage = ctx.usage if self._forward_usage else None
             # The parent's ceilings ride along with its usage, so the budget is tree-wide.
-            # No request is held back the way `reserved_usage_limits` holds one for the nested
-            # runs capabilities start from a hook: a delegation runs in the tool-execution
-            # phase, after the parent's request was made and counted, so there is no approved
-            # request left for the child to spend.
+            # See `_forwarded_limits` for the two fields that cannot be passed through as-is.
             usage_limits = _forwarded_limits(ctx.usage_limits) if self._forward_usage else None
 
         # A selected menu option decides the model and how it runs. Without one, a

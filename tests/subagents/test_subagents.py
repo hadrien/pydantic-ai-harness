@@ -118,6 +118,25 @@ def _delegate_two_then_finish(first: str, second: str) -> FunctionModel:
     return FunctionModel(model_fn)
 
 
+def _parent_delegating_to_worker_making(child_tool_calls: int) -> Agent[object, str]:
+    """A parent that delegates once to a `worker` making exactly `child_tool_calls` tool calls."""
+    seen = {'n': 0}
+
+    def worker_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen['n'] += 1
+        if seen['n'] <= child_tool_calls:
+            return ModelResponse(parts=[ToolCallPart('noop', {}, tool_call_id=f'n{seen["n"]}')])
+        return ModelResponse(parts=[TextPart('W')])
+
+    worker = Agent(FunctionModel(worker_fn), name='worker')
+
+    @worker.tool_plain
+    def noop() -> str:  # pyright: ignore[reportUnusedFunction]
+        return 'x'
+
+    return Agent(_delegate_then_finish('worker'), capabilities=[SubAgents(agents=[SubAgent(worker)])])
+
+
 def _delegate_returns(result: Any) -> list[str]:
     """The `delegate_task` tool-return contents from a run result, in order."""
     return [
@@ -584,24 +603,22 @@ class TestRunControls:
 
     async def test_shared_tool_calls_limit_bounds_the_tree(self) -> None:
         # `tool_calls_limit` is forwarded like every other ceiling, and the delegation itself
-        # counts: one `delegate_task` call plus one child tool call reaches a limit of 2.
-        def worker_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-            return ModelResponse(parts=[ToolCallPart('noop', {}, tool_call_id=f'n{len(messages)}')])
+        # counts: one `delegate_task` call plus one child tool call exactly fills a limit of 2.
+        parent = _parent_delegating_to_worker_making(1)
+        usage = RunUsage()
+        result = await parent.run('go', usage=usage, usage_limits=UsageLimits(tool_calls_limit=2))
+        assert result.output == 'all done'
+        assert usage.tool_calls == 2
 
-        worker = Agent(FunctionModel(worker_fn), name='worker')
-
-        @worker.tool_plain
-        def noop() -> str:  # pyright: ignore[reportUnusedFunction]
-            return 'x'
-
-        parent: Agent[object, str] = Agent(
-            _delegate_then_finish('worker'),
-            capabilities=[SubAgents(agents=[SubAgent(worker)])],
-        )
+    async def test_shared_tool_calls_limit_reserves_the_delegation_in_flight(self) -> None:
+        # `delegate_task` is counted when it returns, not when it starts, so the child runs
+        # against a limit reduced by one. Without that reservation a child that fits its own
+        # budget still leaves the tree one call over the ceiling.
+        parent = _parent_delegating_to_worker_making(1)
         usage = RunUsage()
         with pytest.raises(UsageLimitExceeded):
-            await parent.run('go', usage=usage, usage_limits=UsageLimits(tool_calls_limit=2))
-        assert usage.tool_calls == 2
+            await parent.run('go', usage=usage, usage_limits=UsageLimits(tool_calls_limit=1))
+        assert usage.tool_calls == 0
 
     async def test_count_tokens_before_request_is_not_forwarded(self) -> None:
         # The parent's token-counting pass is a request pipeline, not a budget. Forwarding it
