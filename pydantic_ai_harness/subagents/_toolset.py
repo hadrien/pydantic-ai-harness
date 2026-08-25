@@ -31,6 +31,7 @@ from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 from pydantic_ai.toolsets._capability_owned import CapabilityOwnedToolset
 from pydantic_ai.usage import UsageLimits
 
+from pydantic_ai_harness._usage import forwarded_usage_limits
 from pydantic_ai_harness.subagents._models import ModelOption, validate_restriction
 
 logger = logging.getLogger(__name__)
@@ -53,30 +54,6 @@ _ALWAYS_PROPAGATE: tuple[type[Exception], ...] = (
     SkipToolExecution,
     UserError,
 )
-
-
-def _forwarded_limits(limits: UsageLimits | None) -> UsageLimits | None:
-    """The parent's `UsageLimits` as a sub-agent run should inherit them.
-
-    Every ceiling carries over, which is what makes the budget tree-wide, with two adjustments.
-
-    `count_tokens_before_request` is dropped: it selects a request pipeline rather than setting a
-    budget, and `Model.count_tokens` raises `NotImplementedError` on the models that do not
-    implement it. A delegation can route the child to a different model (see the `models` menu),
-    so inheriting the flag would abort delegations whose parent-side token counting works fine.
-
-    A finite `tool_calls_limit` reserves one call for the delegation in flight. The parent's
-    `delegate_task` call is counted once it returns, not when it starts, so a child checking the
-    raw limit spends a budget that does not yet include the delegation wrapping it and the tree
-    lands one call over. `request_limit` needs no such reservation: a delegation runs in the
-    tool-execution phase, after the parent's request was made and counted.
-    """
-    if limits is None:
-        return None
-    if limits.tool_calls_limit is None and not limits.count_tokens_before_request:
-        return limits
-    reserved = None if limits.tool_calls_limit is None else max(0, limits.tool_calls_limit - 1)
-    return replace(limits, tool_calls_limit=reserved, count_tokens_before_request=False)
 
 
 @dataclass(frozen=True)
@@ -342,8 +319,10 @@ class SubAgentToolset(FunctionToolset[AgentDepsT]):
             own_budget = False
             usage = ctx.usage if self._forward_usage else None
             # The parent's ceilings ride along with its usage, so the budget is tree-wide.
-            # See `_forwarded_limits` for the two fields that cannot be passed through as-is.
-            usage_limits = _forwarded_limits(ctx.usage_limits) if self._forward_usage else None
+            # See `forwarded_usage_limits` for the two fields that cannot pass through as-is.
+            usage_limits = (
+                forwarded_usage_limits(ctx.usage_limits, reserve_tool_call=True) if self._forward_usage else None
+            )
 
         # A selected menu option decides the model and how it runs. Without one, a
         # sub-agent with no model of its own (e.g. one loaded from disk) inherits the
