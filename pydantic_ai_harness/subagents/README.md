@@ -247,7 +247,7 @@ SubAgent(
 
 ## Notes
 
-- Sub-agents can themselves have `SubAgents`, forming a tree. Share `usage` (the default) and set a `usage_limits` on the top-level run to bound the whole tree.
+- Sub-agents can themselves have `SubAgents`, forming a tree. Share `usage` (the default) and set a `usage_limits` on the top-level run to bound the whole tree -- exactly for sequential delegations, approximately under a parallel fan-out (see "Deps, usage, tools, and capabilities").
 - Delegations the model issues in parallel run as independent sub-agent runs.
 
 ## Further reading

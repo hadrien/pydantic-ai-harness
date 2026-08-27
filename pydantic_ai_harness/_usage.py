@@ -27,11 +27,13 @@ def forwarded_usage_limits(limits: UsageLimits | None, *, reserve_tool_call: boo
     different model from the parent, so inheriting the flag aborts runs whose parent-side token
     counting works.
 
-    Dropping it costs preflight enforcement on a nested model that does implement `count_tokens`:
-    `input_tokens_limit` and `per_request_input_tokens_limit` are checked against the response
-    instead, so one oversized nested request is sent before the ceiling trips. Keeping it only where
-    it works needs a run-and-fall-back, tracked in #697; there is no way to ask a model whether it
-    implements `count_tokens`.
+    Dropping it costs preflight enforcement on a nested model that does implement `count_tokens`.
+    The flag is what folds the pending request's counted tokens and its priced cost into the usage
+    checked before the request, so without it `per_request_input_tokens_limit`, `input_tokens_limit`,
+    `total_tokens_limit` and `cost_limit` no longer see that request ahead of time and are checked
+    against the response instead: one oversized nested request is sent before the ceiling trips.
+    Keeping it only where it works needs a run-and-fall-back, tracked in #697; there is no way to
+    ask a model whether it implements `count_tokens`.
 
     Set `reserve_tool_call` when the nested run can itself make tool calls. The tool wrapping it is
     counted against `tool_calls_limit` once it returns, not when it starts, so a nested run checking
