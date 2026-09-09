@@ -653,6 +653,74 @@ class TestRunControls:
         )
         assert result.output == 'all done'
 
+    async def test_parallel_fanout_overshoot_matches_documented_request_number(self) -> None:
+        # The docs pin the fan-out overshoot: eight parallel delegations spend nine requests
+        # under `request_limit=5`. The worker model must yield between the limit check and the
+        # response, as a real model does; a non-yielding FunctionModel serializes the checks
+        # and trips the limit at 5 instead.
+        async def worker_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            await asyncio.sleep(0)
+            return ModelResponse(parts=[TextPart('W')])
+
+        calls = {'n': 0}
+
+        def parent_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            calls['n'] += 1
+            if calls['n'] == 1:
+                return ModelResponse(
+                    parts=[
+                        ToolCallPart('delegate_task', {'agent_name': 'worker', 'task': 't'}, tool_call_id=f'c{i}')
+                        for i in range(8)
+                    ]
+                )
+            return ModelResponse(parts=[TextPart('all done')])
+
+        worker = Agent(FunctionModel(worker_fn), name='worker')
+        parent: Agent[object, str] = Agent(
+            FunctionModel(parent_fn), capabilities=[SubAgents(agents=[SubAgent(worker)])]
+        )
+        usage = RunUsage()
+        with pytest.raises(UsageLimitExceeded):
+            await parent.run('go', usage=usage, usage_limits=UsageLimits(request_limit=5))
+        assert usage.requests == 9
+
+    async def test_parallel_fanout_overshoot_matches_documented_tool_call_number(self) -> None:
+        # Same trap as above for `tool_calls_limit`: eight delegations each making one child
+        # tool call spend sixteen tool calls under `tool_calls_limit=9` once the worker model
+        # yields, because each delegation reserves only its own call.
+        async def worker_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            await asyncio.sleep(0)
+            if any(isinstance(p, ToolCallPart) for m in messages for p in m.parts):
+                return ModelResponse(parts=[TextPart('W')])
+            return ModelResponse(parts=[ToolCallPart('noop', {}, tool_call_id='n1')])
+
+        worker = Agent(FunctionModel(worker_fn), name='worker')
+
+        @worker.tool_plain
+        def noop() -> str:  # pyright: ignore[reportUnusedFunction]
+            return 'x'
+
+        calls = {'n': 0}
+
+        def parent_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            calls['n'] += 1
+            if calls['n'] == 1:
+                return ModelResponse(
+                    parts=[
+                        ToolCallPart('delegate_task', {'agent_name': 'worker', 'task': 't'}, tool_call_id=f'c{i}')
+                        for i in range(8)
+                    ]
+                )
+            return ModelResponse(parts=[TextPart('all done')])
+
+        parent: Agent[object, str] = Agent(
+            FunctionModel(parent_fn), capabilities=[SubAgents(agents=[SubAgent(worker)])]
+        )
+        usage = RunUsage()
+        result = await parent.run('go', usage=usage, usage_limits=UsageLimits(tool_calls_limit=9))
+        assert result.output == 'all done'
+        assert usage.tool_calls == 16
+
     async def test_timeout_returns_soft_message(self) -> None:
         async def slow_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             await asyncio.sleep(1)

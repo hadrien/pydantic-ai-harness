@@ -11,7 +11,7 @@ from pydantic_ai.usage import UsageLimits
 from pydantic_ai_harness._usage import forwarded_usage_limits, reserved_usage_limits
 
 
-def test_reserved_usage_limits_reserves_one_request_and_preserves_other_limits() -> None:
+def test_reserved_usage_limits_reserves_one_request_and_drops_the_token_counting_pass() -> None:
     limits = UsageLimits(
         cost_limit=Decimal('0.01'),
         request_limit=1,
@@ -23,7 +23,13 @@ def test_reserved_usage_limits_reserves_one_request_and_preserves_other_limits()
         count_tokens_before_request=True,
     )
 
-    assert reserved_usage_limits(limits) == replace(limits, request_limit=0)
+    assert reserved_usage_limits(limits) == replace(limits, request_limit=0, count_tokens_before_request=False)
+
+
+def test_reserved_usage_limits_drops_the_token_counting_pass_on_unbounded_limits() -> None:
+    limits = UsageLimits(request_limit=None, count_tokens_before_request=True)
+
+    assert reserved_usage_limits(limits) == replace(limits, count_tokens_before_request=False)
 
 
 def test_reserved_usage_limits_clamps_zero_request_limit() -> None:
