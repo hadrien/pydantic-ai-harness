@@ -13,8 +13,8 @@ def reserved_usage_limits(limits: UsageLimits | None) -> UsageLimits | None:
     The hook may run after the parent request's limit check. Reducing a finite request limit
     prevents the nested call from spending the request that was already approved for the parent.
     `count_tokens_before_request` is dropped for the same reason `forwarded_usage_limits`
-    drops it: the nested run's model is configured separately from the run's model, so it can
-    lack `count_tokens`, and inheriting the flag aborts runs whose parent-side counting works.
+    drops it: the nested run can be on a different model from the run's, so it may lack
+    `count_tokens`, and inheriting the flag aborts runs whose parent-side counting works.
     """
     if limits is None:
         return None

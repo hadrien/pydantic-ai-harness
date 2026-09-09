@@ -77,6 +77,12 @@ def test_forwarded_usage_limits_clamps_zero_tool_calls_limit() -> None:
     assert forwarded_usage_limits(limits, reserve_tool_call=True) == limits
 
 
+def test_forwarded_usage_limits_reservation_without_a_tool_calls_limit_is_a_no_op() -> None:
+    limits = UsageLimits()
+
+    assert forwarded_usage_limits(limits, reserve_tool_call=True) is limits
+
+
 @pytest.mark.parametrize('limits', [None, UsageLimits()])
 def test_forwarded_usage_limits_passes_untouched_limits_through(limits: UsageLimits | None) -> None:
     assert forwarded_usage_limits(limits) is limits
