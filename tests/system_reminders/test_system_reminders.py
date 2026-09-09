@@ -665,6 +665,16 @@ class TestLLMReminder:
         assert 'ship the fix' in result  # GoalReanchor fallback, no nested request spent
         assert ctx.usage.requests == 1
 
+    async def test_count_tokens_before_request_is_not_forwarded(self) -> None:
+        """The reminder model may lack `count_tokens` support; inheriting the parent's flag
+        would abort the nested run and swap the generated reminder for fallback text."""
+        store: dict[str, str] = {}
+        ctx = _ctx(
+            messages=[ModelRequest(parts=[UserPromptPart('g')])],
+            usage_limits=UsageLimits(count_tokens_before_request=True),
+        )
+        assert await LLMReminder(model=_capture_model(store))(ctx) == 'generated'
+
     async def test_generates_while_budget_remains(self) -> None:
         store: dict[str, str] = {}
         ctx = _ctx(
@@ -674,6 +684,19 @@ class TestLLMReminder:
         )
         assert await LLMReminder(model=_capture_model(store))(ctx) == 'generated'
         assert ctx.usage.requests == 2
+
+    async def test_nested_run_drops_the_token_counting_flag(self) -> None:
+        """`count_tokens_before_request` selects a request pipeline, not a budget.
+
+        The reminder always runs its own model, which can lack `count_tokens` support; forwarding
+        the flag aborts the nested run and the caller silently falls back to `GoalReanchor` text.
+        """
+        store: dict[str, str] = {}
+        ctx = _ctx(
+            messages=[ModelRequest(parts=[UserPromptPart('ship the fix')])],
+            usage_limits=UsageLimits(count_tokens_before_request=True, input_tokens_limit=10_000),
+        )
+        assert await LLMReminder(model=_capture_model(store))(ctx) == 'generated'
 
     async def test_unlimited_requests_are_passed_through(self) -> None:
         store: dict[str, str] = {}
