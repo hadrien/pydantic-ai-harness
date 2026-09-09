@@ -100,6 +100,24 @@ def _delegate_n_then_finish(agent_name: str, n: int) -> FunctionModel:
     return FunctionModel(model_fn)
 
 
+def _delegate_n_parallel_then_finish(agent_name: str, n: int) -> FunctionModel:
+    """A parent model that issues `n` parallel delegations to `agent_name` in one response."""
+    calls = {'n': 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls['n'] += 1
+        if calls['n'] == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart('delegate_task', {'agent_name': agent_name, 'task': 't'}, tool_call_id=f'c{i}')
+                    for i in range(n)
+                ]
+            )
+        return ModelResponse(parts=[TextPart('all done')])
+
+    return FunctionModel(model_fn)
+
+
 def _delegate_two_then_finish(first: str, second: str) -> FunctionModel:
     """A parent model that delegates to `first`, then `second`, then replies with text."""
     calls = {'n': 0}
@@ -662,22 +680,10 @@ class TestRunControls:
             await asyncio.sleep(0)
             return ModelResponse(parts=[TextPart('W')])
 
-        calls = {'n': 0}
-
-        def parent_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-            calls['n'] += 1
-            if calls['n'] == 1:
-                return ModelResponse(
-                    parts=[
-                        ToolCallPart('delegate_task', {'agent_name': 'worker', 'task': 't'}, tool_call_id=f'c{i}')
-                        for i in range(8)
-                    ]
-                )
-            return ModelResponse(parts=[TextPart('all done')])
-
         worker = Agent(FunctionModel(worker_fn), name='worker')
         parent: Agent[object, str] = Agent(
-            FunctionModel(parent_fn), capabilities=[SubAgents(agents=[SubAgent(worker)])]
+            _delegate_n_parallel_then_finish('worker', 8),
+            capabilities=[SubAgents(agents=[SubAgent(worker)])],
         )
         usage = RunUsage()
         with pytest.raises(UsageLimitExceeded):
@@ -700,21 +706,9 @@ class TestRunControls:
         def noop() -> str:  # pyright: ignore[reportUnusedFunction]
             return 'x'
 
-        calls = {'n': 0}
-
-        def parent_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-            calls['n'] += 1
-            if calls['n'] == 1:
-                return ModelResponse(
-                    parts=[
-                        ToolCallPart('delegate_task', {'agent_name': 'worker', 'task': 't'}, tool_call_id=f'c{i}')
-                        for i in range(8)
-                    ]
-                )
-            return ModelResponse(parts=[TextPart('all done')])
-
         parent: Agent[object, str] = Agent(
-            FunctionModel(parent_fn), capabilities=[SubAgents(agents=[SubAgent(worker)])]
+            _delegate_n_parallel_then_finish('worker', 8),
+            capabilities=[SubAgents(agents=[SubAgent(worker)])],
         )
         usage = RunUsage()
         result = await parent.run('go', usage=usage, usage_limits=UsageLimits(tool_calls_limit=9))
